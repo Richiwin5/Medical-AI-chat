@@ -1,0 +1,6 @@
+venv/
+__pycache__/
+hospital_memory.db
+models/
+*.pyc
+.DS_Store
