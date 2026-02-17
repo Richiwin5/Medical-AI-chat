@@ -1,3 +1,4 @@
+--prefer-binary
 gunicorn
 absl-py==2.4.0
 accelerate==1.12.0
