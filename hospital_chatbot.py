@@ -1,55 +1,124 @@
-from gpt4all import GPT4All
+import os
 import re
+from gpt4all import GPT4All
+
+from database import (
+    SessionLocal,
+    get_user_memory,
+    save_user_memory,
+    save_chat
+)
 
 # =========================
 # Load Model (ONLY ONCE)
 # =========================
-MODEL_PATH = "models/mistral-7b-openorca.gguf2.Q4_0.gguf"
+
+MODEL_PATH = os.path.join(
+    os.path.dirname(__file__),
+    "models",
+    "mistral-7b-openorca.gguf2.Q4_0.gguf"
+)
+
 model = GPT4All(MODEL_PATH, allow_download=False)
 
-# =========================
-# Conversation Memory
-# =========================
-memory = {
-    "symptoms": [],
-    "duration": None,
-    "severity": None
-}
 
 # =========================
 # Clean AI Output
 # =========================
+
 def clean_output(text):
     remove_words = ["Doctor:", "Assistant:", "Respond:", "Bot:", "Advice:"]
     for w in remove_words:
         text = text.replace(w, "")
-    # Collapse multiple newlines and spaces
+
     text = re.sub(r"\n+", " ", text)
     text = re.sub(r"\s+", " ", text)
-    # Strip repeated reminders
     text = re.sub(r'(Remember.*?provider\.)', '', text, flags=re.I)
+
     return text.strip()
+
 
 # =========================
 # Emergency Check
 # =========================
+
 def emergency_check(text):
+
     danger = [
         "bleeding", "pregnant", "chest pain", "faint",
         "unconscious", "breathing", "seizure"
     ]
+
     for d in danger:
         if d in text.lower():
             return True
+
     return False
+
+def is_recovered(text):
+    
+    good_phrases = [
+        "i am fine",
+        "i'm fine",
+        "i am okay",
+        "i'm okay",
+        "i feel better",
+        "i am well",
+        "i'm well",
+        "i have recovered",
+        "no more pain",
+        "no more fever"
+    ]
+
+    text = text.lower()
+
+    return any(p in text for p in good_phrases)
+
+# =========================
+# Memory Update
+# =========================
+
+def update_memory(text, memory):
+    
+    text = text.lower()
+
+    # Clear memory if recovered
+    if is_recovered(text):
+
+        memory["symptoms"].clear()
+        memory["duration"] = None
+        memory["severity"] = None
+
+        return
+
+
+    symptoms_list = [
+        "fever", "headache", "pain", "cough", "cold",
+        "tired", "fatigue", "vomiting", "diarrhea",
+        "bleeding", "swelling", "nausea"
+    ]
+
+    for s in symptoms_list:
+        if s in text and s not in memory["symptoms"]:
+            memory["symptoms"].append(s)
+
+    if "yesterday" in text:
+        memory["duration"] = "since yesterday"
+    elif "today" in text:
+        memory["duration"] = "today"
+
 
 # =========================
 # Prompt Builder
 # =========================
-def build_prompt(user_input):
+
+def build_prompt(user_input, memory):
+
     context = ""
+
     if memory["symptoms"]:
         context += f"Symptoms: {', '.join(memory['symptoms'])}\n"
+
     if memory["duration"]:
         context += f"Duration: {memory['duration']}\n"
 
@@ -63,73 +132,94 @@ If serious, advise hospital visit.
 Patient: {user_input}
 Reply naturally in one short paragraph.
 """
+
     return prompt
 
-# =========================
-# Save Memory
-# =========================
-def update_memory(text):
-    symptoms_list = [
-        "fever", "headache", "pain", "cough", "cold",
-        "tired", "fatigue", "vomiting", "diarrhea",
-        "bleeding", "swelling", "nausea"
-    ]
-    for s in symptoms_list:
-        if s in text.lower() and s not in memory["symptoms"]:
-            memory["symptoms"].append(s)
-
-    if "yesterday" in text.lower():
-        memory["duration"] = "since yesterday"
-    elif "today" in text.lower():
-        memory["duration"] = "today"
 
 # =========================
-# Main Chat Loop
+# Main Chat (Terminal Test)
 # =========================
+
 def chat():
-    print("\n Hospital Assistant Ready ")
+
+    print("\n🏥 Hospital Assistant Ready")
     print("Type 'exit' to quit\n")
 
-    while True:
-        try:
+    # Simulate logged-in user
+    user_id = input("Enter your User ID: ").strip()
+
+    if not user_id:
+        print(" User ID required.")
+        return
+
+    db = SessionLocal()
+
+    try:
+
+        while True:
+
             user = input("You: ").strip()
-        except KeyboardInterrupt:
-            print("\nBot: Take care! Get well soon ❤️")
-            break
 
-        if not user:
-            continue
+            if not user:
+                continue
 
-        if user.lower() == "exit":
-            print("Bot: Take care! Get well soon ❤️")
-            break
+            if user.lower() == "exit":
+                print("Bot: Take care! Get well soon ❤️")
+                break
 
-        # Save memory
-        update_memory(user)
+            # Load memory
+            memory = get_user_memory(db, user_id)
 
-        # Emergency
-        if emergency_check(user):
-            print("\n Bot: This may be serious.")
-            print("Please visit our hospital immediately or call our emergency services.\n")
-            continue
+            # Save user chat
+            save_chat(db, user_id, "user", user)
 
-        # AI Response
-        prompt = build_prompt(user)
-        with model.chat_session() as session:
-            response = model.generate(
-                prompt,
-                max_tokens=150,
-                temp=0.4
-            )
+            # Update memory
+            update_memory(user, memory)
 
-        print("\nBot:", clean_output(response), "\n")
+            # Save memory
+            save_user_memory(db, user_id, memory)
+
+            # Emergency
+            if emergency_check(user):
+
+                reply = (
+                    "This may be serious. "
+                    "Please visit the hospital immediately."
+                )
+
+                print("\nBot:", reply, "\n")
+
+                save_chat(db, user_id, "assistant", reply)
+
+                continue
+
+            # AI Response
+            prompt = build_prompt(user, memory)
+
+            with model.chat_session():
+                response = model.generate(
+                    prompt,
+                    max_tokens=150,
+                    temp=0.4
+                )
+
+            reply = clean_output(response)
+
+            print("\nBot:", reply, "\n")
+
+            # Save AI reply
+            save_chat(db, user_id, "assistant", reply)
+
+    finally:
+        db.close()
+
 
 # =========================
 # Run
 # =========================
+
 if __name__ == "__main__":
     chat()
-
 
 
 
