@@ -73,7 +73,7 @@ safetensors==0.7.0
 schema==0.6.7
 scikit-learn==1.8.0
 scipy==1.17.0
-scispacy==0.6.2
+scispacy==0.6.3
 sentencepiece==0.2.1
 shellingham==1.5.4
 six==1.17.0
