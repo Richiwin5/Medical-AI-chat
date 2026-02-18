@@ -18,7 +18,9 @@ model = GPT4All(MODEL_PATH, allow_download=False)
 
 # App Setup
 
-app = FastAPI(title="Hospital AI API")
+app = Flask(__name__)
+CORS(app)
+
 
 # Request Models
 
@@ -90,54 +92,49 @@ def generate_reply(user_input, memory):
     return clean_output(response)
 
 # Chat Endpoint
-@app.post("/chat")
-def chat(request: ChatRequest, db=Depends(get_db)):
-    user_id = request.user_id
-    message = request.message
-
-    # Load memory
-    memory = get_user_memory(db, user_id)
-
-    # Save user message
-    save_chat(db, user_id, "user", message)
-
-    # Update memory
+@app.route("/chat", methods=["POST"])
+def chat():
+    data = request.get_json()
+    user_id = data.get("user_id")
+    message = data.get("message")
+    
+    memory = get_user_memory(get_db(), user_id)
+    save_chat(get_db(), user_id, "user", message)
     update_memory(message, memory)
-
-    # Save memory
-    save_user_memory(db, user_id, memory)
-
-    # Emergency check
+    save_user_memory(get_db(), user_id, memory)
+    
     if emergency_check(message):
         reply = "This may be serious. Please visit the hospital immediately."
-        save_chat(db, user_id, "assistant", reply)
-        return {"reply": reply}
-
-    # AI Reply
+        save_chat(get_db(), user_id, "assistant", reply)
+        return jsonify({"reply": reply})
+    
     reply = generate_reply(message, memory)
-    save_chat(db, user_id, "assistant", reply)
-
-    return {
-        "reply": reply,
-        "memory": memory
-    }
+    save_chat(get_db(), user_id, "assistant", reply)
+    return jsonify({"reply": reply, "memory": memory})
 
 
 # Chat History Endpoint
 
-@app.post("/chat/history")
-def history(request: HistoryRequest, db=Depends(get_db)):
-    chats = get_chat_history(db, request.user_id, request.limit)
-    data = [{
+@app.route("/chat/history", methods=["POST"])
+def history():
+    data = request.get_json()
+    user_id = data.get("user_id")
+    limit = data.get("limit", 20)
+
+    db = get_db()
+    chats = get_chat_history(db, user_id, limit)
+    history_data = [{
         "role": c.role,
         "message": c.message,
         "time": c.timestamp.isoformat()
     } for c in reversed(chats)]  # oldest first
-    return {
-        "user_id": request.user_id,
-        "count": len(data),
-        "history": data
-    }
+
+    return jsonify({
+        "user_id": user_id,
+        "count": len(history_data),
+        "history": history_data
+    })
+
 
 
 if __name__ == "__main__":
