@@ -13,7 +13,7 @@ MODEL_PATH = os.path.join(
     "models",
     "mistral-7b-openorca.gguf2.Q4_0.gguf"
 )
-model = GPT4All(MODEL_PATH, allow_download=False)
+model = GPT4All(MODEL_PATH, allow_download=True)
 
 # =========================
 # Flask App Setup
@@ -140,9 +140,7 @@ def history():
     finally:
         db.close()
 
-# =========================
-# Run Flask App
-# =========================
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     app.run(host="0.0.0.0", port=port)
