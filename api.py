@@ -140,11 +140,9 @@ def history(request: HistoryRequest, db=Depends(get_db)):
     }
 
 
-# Health Check
-
-@app.get("/")
-def home():
-    return {"status": "Hospital AI API is running"}
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8000))
+    app.run(host="0.0.0.0", port=port)
 
 
 

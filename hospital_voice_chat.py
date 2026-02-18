@@ -126,5 +126,5 @@ Include emotional support and suggest ways to relieve pain or manage the situati
         response = "Sorry, I could not process that. Please try again."
         print("Error:", e)
 
-    print("\n🤖", response)
+    print("\n", response)
     speak(response)
