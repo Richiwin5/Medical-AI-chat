@@ -9,25 +9,21 @@ from database import SessionLocal, get_user_memory, save_user_memory, save_chat,
 # Load Model (only once)
 # =========================
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-MODEL_PATH = os.path.join(
-    BASE_DIR,
-    "models",
-    "mistral-7b-openorca.gguf2.Q4_0.gguf"
-)
-
-model = None
-
-
 def get_model():
     global model
 
     if model is None:
         print("Loading GPT4All model...")
-        model = GPT4All(MODEL_PATH, allow_download=True)
+
+        model = GPT4All(
+            "mistral-7b-openorca.Q4_0.gguf",
+            allow_download=True,
+            device="cpu",
+            n_threads=2
+        )
 
     return model
+
 # =========================
 # Flask App Setup
 # =========================
@@ -96,10 +92,15 @@ Reply naturally in one short paragraph.
 """
 
 def generate_reply(user_input, memory):
+    llm = get_model()  
+
     prompt = build_prompt(user_input, memory)
-    with model.chat_session():
-        response = model.generate(prompt, max_tokens=150, temp=0.4)
+
+    with llm.chat_session():
+        response = llm.generate(prompt, max_tokens=150, temp=0.4)
+
     return clean_output(response)
+
 
 # =========================
 # Routes
