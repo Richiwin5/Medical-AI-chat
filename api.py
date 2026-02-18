@@ -105,6 +105,13 @@ def generate_reply(user_input, memory):
 # =========================
 # Routes
 # =========================
+@app.route("/", methods=["GET"])
+def home():
+    return jsonify({
+        "message": "Medical AI Chat API is running!",
+        "routes": ["/chat (POST)", "/chat/history (POST)"]
+    })
+
 
 @app.route("/chat", methods=["POST"])
 def chat():
@@ -127,11 +134,16 @@ def chat():
             save_chat(db, user_id, "assistant", reply)
             return jsonify({"reply": reply})
 
-        reply = generate_reply(message, memory)
+        try:
+            reply = generate_reply(message, memory)
+        except Exception as e:
+            return jsonify({"error": f"LLM generation failed: {str(e)}"}), 500
+
         save_chat(db, user_id, "assistant", reply)
         return jsonify({"reply": reply, "memory": memory})
     finally:
         db.close()
+
 
 @app.route("/chat/history", methods=["POST"])
 def history():
