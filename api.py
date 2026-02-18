@@ -8,13 +8,26 @@ from database import SessionLocal, get_user_memory, save_user_memory, save_chat,
 # =========================
 # Load Model (only once)
 # =========================
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 MODEL_PATH = os.path.join(
-    os.path.dirname(__file__),
+    BASE_DIR,
     "models",
     "mistral-7b-openorca.gguf2.Q4_0.gguf"
 )
-model = GPT4All(MODEL_PATH, allow_download=True)
 
+model = None
+
+
+def get_model():
+    global model
+
+    if model is None:
+        print("Loading GPT4All model...")
+        model = GPT4All(MODEL_PATH, allow_download=True)
+
+    return model
 # =========================
 # Flask App Setup
 # =========================
