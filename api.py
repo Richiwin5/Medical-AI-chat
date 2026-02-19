@@ -7,30 +7,27 @@ from gpt4all import GPT4All
 from database import SessionLocal, get_user_memory, save_user_memory, save_chat, get_chat_history
 
 
-# Load Model ON STARTUP
 
 print("Loading GPT4All model at startup...")
 
-MODEL_PATH = "mistral-7b-openorca.Q4_0.gguf"  # adjust path if needed
+MODEL_PATH = "mistral-7b-openorca.Q4_0.gguf"
 model = None
 
 try:
     model = GPT4All(
         MODEL_PATH,
         allow_download=True,
-        device="cpu",    # enforce CPU (Render doesn’t have CUDA)
+        device="cpu",  # CPU only
         n_threads=2
     )
-    print("Model loaded successfully ")
+    print("Model loaded successfully ✅")
 except Exception as e:
     print(f"Failed to load GPT4All model: {e}")
-
 
 # Flask App Setup
 
 app = Flask(__name__)
 CORS(app)
-
 
 # Helpers
 
@@ -95,14 +92,17 @@ Reply naturally in one short paragraph.
 """
 
 def generate_reply(user_input, memory):
+    if not model:
+        return "Model not loaded. Please try again later."
+
     prompt = build_prompt(user_input, memory)
     with model.chat_session():
         response = model.generate(prompt, max_tokens=150, temp=0.4)
     return clean_output(response)
 
-
+# =========================
 # Routes
-
+# =========================
 @app.route("/", methods=["GET"])
 def home():
     return jsonify({
