@@ -8,6 +8,7 @@ from database import SessionLocal, get_user_memory, save_user_memory, save_chat,
 # =========================
 # Load Model (only once)
 # =========================
+model = None  
 
 def get_model():
     global model
