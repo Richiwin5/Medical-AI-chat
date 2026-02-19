@@ -1,57 +1,87 @@
 import os
 import re
-import json
+import urllib.request
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from gpt4all import GPT4All
 from pathlib import Path
+import threading
+import time
 
 app = Flask(__name__)
-CORS(app)  # Same as your working math solver
+CORS(app)
 
 # =========================
-# Load Model ONCE at startup (like your math solver)
+# Model Management with Auto-Download
 # =========================
 
+MODEL_URL = "https://gpt4all.io/models/gguf/mistral-7b-openorca.gguf2.Q4_0.gguf"
 MODEL_FILENAME = "mistral-7b-openorca.gguf2.Q4_0.gguf"
+MODEL_PATH = os.path.join(os.path.dirname(__file__), "models", MODEL_FILENAME)
 
-# Try multiple possible paths (same pattern as your math solver)
-possible_paths = [
-    os.path.join(os.path.dirname(__file__), "models", MODEL_FILENAME),
-    os.path.join(os.path.dirname(__file__), MODEL_FILENAME),
-    "/app/models/" + MODEL_FILENAME,  # Docker path
-    "./models/" + MODEL_FILENAME,
-    MODEL_FILENAME  # Current directory
-]
+def download_model():
+    """Download model if it doesn't exist"""
+    try:
+        # Create models directory
+        os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
+        
+        # Check if already downloaded
+        if os.path.exists(MODEL_PATH):
+            print(f"✅ Model already exists at {MODEL_PATH}")
+            return True
+        
+        print(f"📥 Downloading model from {MODEL_URL}")
+        print("⚠️  This may take several minutes (model is ~4GB)...")
+        
+        def progress_callback(block_num, block_size, total_size):
+            downloaded = block_num * block_size
+            if total_size > 0:
+                percent = min(100, downloaded * 100 / total_size)
+                print(f"\rProgress: {percent:.1f}%", end="")
+        
+        # Download with progress
+        urllib.request.urlretrieve(
+            MODEL_URL, 
+            MODEL_PATH,
+            reporthook=progress_callback
+        )
+        print("\n✅ Model downloaded successfully!")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Failed to download model: {e}")
+        return False
 
+# Try to load model, download if needed
 model = None
-for path in possible_paths:
-    if os.path.exists(path):
-        print(f"✅ Found model at: {path}")
+
+# First check if model exists
+if os.path.exists(MODEL_PATH):
+    print(f"✅ Found model at {MODEL_PATH}")
+    try:
+        model = GPT4All(MODEL_PATH, allow_download=False)
+        print("✅ Model loaded successfully!")
+    except Exception as e:
+        print(f"❌ Error loading model: {e}")
+        model = None
+else:
+    print("⚠️  Model not found, attempting to download...")
+    if download_model():
         try:
-            model = GPT4All(path, allow_download=False)
-            print("✅ Model loaded successfully!")
-            break
+            model = GPT4All(MODEL_PATH, allow_download=False)
+            print("✅ Model loaded successfully after download!")
         except Exception as e:
-            print(f"❌ Error loading model from {path}: {e}")
+            print(f"❌ Error loading downloaded model: {e}")
             model = None
 
-if model is None:
-    print("⚠️  WARNING: Could not load model from any path!")
-    print("Checked paths:")
-    for path in possible_paths:
-        print(f"  - {path}")
-
 # =========================
-# Simple In-Memory Storage (no database)
+# Simple In-Memory Storage
 # =========================
 
-# Simple dictionary storage (works like your math solver)
 user_memory = {}
 chat_history = {}
 
 def get_user_memory_simple(user_id):
-    """Get memory from dict, not database"""
     if user_id not in user_memory:
         user_memory[user_id] = {
             "symptoms": [],
@@ -61,13 +91,12 @@ def get_user_memory_simple(user_id):
     return user_memory[user_id]
 
 def save_chat_simple(user_id, role, message):
-    """Save chat to dict, not database"""
     if user_id not in chat_history:
         chat_history[user_id] = []
     chat_history[user_id].append({
         "role": role,
         "message": message,
-        "timestamp": str(datetime.now())
+        "timestamp": time.time()
     })
     # Keep only last 50 messages
     if len(chat_history[user_id]) > 50:
@@ -87,7 +116,7 @@ def clean_output(text):
 
 def emergency_check(text):
     danger = ["bleeding", "pregnant", "chest pain", "faint", 
-              "unconscious", "breathing", "seizure"]
+              "unconscious", "breathing", "seizure", "heart attack"]
     text_lower = text.lower()
     for d in danger:
         if d in text_lower:
@@ -101,7 +130,6 @@ def is_recovered(text):
     return any(p in text_lower for p in good_phrases)
 
 def update_memory_simple(text, memory):
-    """Update memory based on text"""
     text_lower = text.lower()
     
     if is_recovered(text_lower):
@@ -112,7 +140,7 @@ def update_memory_simple(text, memory):
     
     symptoms_list = ["fever", "headache", "pain", "cough", "cold",
                      "tired", "fatigue", "vomiting", "diarrhea",
-                     "bleeding", "swelling", "nausea"]
+                     "bleeding", "swelling", "nausea", "pregnant"]
     
     for s in symptoms_list:
         if s in text_lower and s not in memory["symptoms"]:
@@ -122,9 +150,10 @@ def update_memory_simple(text, memory):
         memory["duration"] = "since yesterday"
     elif "today" in text_lower:
         memory["duration"] = "today"
+    elif "week" in text_lower:
+        memory["duration"] = "for a week"
 
 def build_prompt_simple(user_input, memory):
-    """Build prompt for AI"""
     context = ""
     if memory["symptoms"]:
         context += f"Symptoms: {', '.join(memory['symptoms'])}\n"
@@ -143,19 +172,19 @@ Reply naturally in one short paragraph.
     return prompt
 
 # =========================
-# API Endpoints (Same pattern as your math solver)
+# API Endpoints
 # =========================
 
 @app.route("/", methods=["GET"])
 def home():
     return jsonify({
         "status": "Hospital AI Assistant is Live 🏥",
-        "model_loaded": model is not None
+        "model_loaded": model is not None,
+        "model_path": MODEL_PATH if os.path.exists(MODEL_PATH) else None
     })
 
 @app.route("/health", methods=["GET"])
 def health():
-    """Simple health check like your math solver"""
     return jsonify({
         "status": "healthy",
         "model_loaded": model is not None
@@ -163,16 +192,12 @@ def health():
 
 @app.route("/chat", methods=["POST"])
 def chat():
-    """Simple chat endpoint - same pattern as your /solve-text"""
-    
-    # Get JSON data (same as your math solver)
     data = request.get_json()
     
     if not data or "message" not in data:
         return jsonify({"error": "No message provided"}), 400
     
-    # Get parameters
-    user_id = data.get("user_id", "anonymous")  # Default if not provided
+    user_id = data.get("user_id", "anonymous")
     user_message = data["message"]
     
     print(f"Received from {user_id}: {user_message}")
@@ -181,12 +206,12 @@ def chat():
     if model is None:
         return jsonify({
             "error": "Model not loaded",
-            "reply": "I'm currently unavailable. Please try again later."
+            "reply": "I'm currently starting up. Please try again in a few minutes."
         }), 503
     
-    # Check emergency first
+    # Check emergency
     if emergency_check(user_message):
-        reply = "This may be serious. Please visit the hospital immediately."
+        reply = "⚠️ This may be serious. Please visit the hospital immediately."
     else:
         try:
             # Get user memory
@@ -194,8 +219,6 @@ def chat():
             
             # Update memory
             update_memory_simple(user_message, memory)
-            
-            # Save to memory dict
             user_memory[user_id] = memory
             
             # Save chat
@@ -204,7 +227,6 @@ def chat():
             # Generate response
             prompt = build_prompt_simple(user_message, memory)
             
-            # Use model (same pattern every time)
             with model.chat_session():
                 response = model.generate(
                     prompt,
@@ -213,17 +235,12 @@ def chat():
                 )
             
             reply = clean_output(response)
-            
-            # Save reply
             save_chat_simple(user_id, "assistant", reply)
             
         except Exception as e:
             print(f"Error: {e}")
             reply = "I encountered an error. Please try again."
     
-    print(f"Reply: {reply}")
-    
-    # Return response (same format as your math solver)
     return jsonify({
         "reply": reply,
         "user_id": user_id
@@ -231,7 +248,6 @@ def chat():
 
 @app.route("/memory/<user_id>", methods=["GET"])
 def get_memory(user_id):
-    """Get user memory"""
     memory = get_user_memory_simple(user_id)
     return jsonify({
         "user_id": user_id,
@@ -240,35 +256,21 @@ def get_memory(user_id):
 
 @app.route("/history/<user_id>", methods=["GET"])
 def get_history(user_id):
-    """Get chat history"""
     history = chat_history.get(user_id, [])
     return jsonify({
         "user_id": user_id,
-        "history": history[-10:]  # Last 10 messages
+        "history": history[-10:]
     })
 
-@app.route("/clear/<user_id>", methods=["POST"])
-def clear_memory(user_id):
-    """Clear user memory"""
-    if user_id in user_memory:
-        user_memory[user_id] = {
-            "symptoms": [],
-            "duration": None,
-            "severity": None
-        }
-    return jsonify({"status": "cleared"})
-
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 6000))
+    port = int(os.environ.get("PORT", 5000))
     print("\n" + "="*50)
     print("🏥 Hospital AI Assistant")
     print("="*50)
     print(f"Model loaded: {'' if model else ''}")
+    if model is None and not os.path.exists(MODEL_PATH):
+        print(" Model will be downloaded on first request...")
     print(f"Port: {port}")
-    print("\nTest with:")
-    print(f'curl -X POST http://localhost:{port}/chat \\')
-    print('  -H "Content-Type: application/json" \\')
-    print('  -d \'{"user_id": "test", "message": "I have a headache"}\'')
     print("="*50)
     
     app.run(host="0.0.0.0", port=port)

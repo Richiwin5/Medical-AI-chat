@@ -1,12 +1,10 @@
+# render.yaml
 services:
   - type: web
-    name: hospitalai
-    env: python
-
+    name: hospital-ai
+    runtime: python
     buildCommand: |
-      pip install --upgrade pip
       pip install -r requirements.txt
-      python -m spacy download en_core_web_sm
-      python -m spacy download en_core_sci_sm
-
-    startCommand: gunicorn main:app
+      chmod +x setup.sh
+      ./setup.sh
+    startCommand: gunicorn api:app --bind 0.0.0.0:$PORT
