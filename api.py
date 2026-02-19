@@ -6,31 +6,34 @@ from flask_cors import CORS
 from gpt4all import GPT4All
 from database import SessionLocal, get_user_memory, save_user_memory, save_chat, get_chat_history
 
-# =========================
+
 # Load Model ON STARTUP
-# =========================
+
 print("Loading GPT4All model at startup...")
 
-MODEL_PATH = "mistral-7b-openorca.Q4_0.gguf"  # adjust if your model path differs
+MODEL_PATH = "mistral-7b-openorca.Q4_0.gguf"  # adjust path if needed
+model = None
 
-model = GPT4All(
-    MODEL_PATH,
-    allow_download=True,
-    device="cpu",
-    n_threads=2
-)
+try:
+    model = GPT4All(
+        MODEL_PATH,
+        allow_download=True,
+        device="cpu",    # enforce CPU (Render doesn’t have CUDA)
+        n_threads=2
+    )
+    print("Model loaded successfully ")
+except Exception as e:
+    print(f"Failed to load GPT4All model: {e}")
 
-print("✅ Model loaded successfully")
 
-# =========================
 # Flask App Setup
-# =========================
+
 app = Flask(__name__)
 CORS(app)
 
-# =========================
+
 # Helpers
-# =========================
+
 def clean_output(text):
     remove_words = ["Doctor:", "Assistant:", "Respond:", "Bot:", "Advice:"]
     for w in remove_words:
@@ -97,9 +100,9 @@ def generate_reply(user_input, memory):
         response = model.generate(prompt, max_tokens=150, temp=0.4)
     return clean_output(response)
 
-# =========================
+
 # Routes
-# =========================
+
 @app.route("/", methods=["GET"])
 def home():
     return jsonify({
@@ -159,9 +162,9 @@ def history():
     finally:
         db.close()
 
-# =========================
+
 # Run App
-# =========================
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     app.run(host="0.0.0.0", port=port)
