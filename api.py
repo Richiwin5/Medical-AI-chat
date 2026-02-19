@@ -1,56 +1,142 @@
-import os
-import re
+# api.py
+
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+import os
+import re
 from gpt4all import GPT4All
-from database import SessionLocal, get_user_memory, save_user_memory, save_chat
+from datetime import datetime
 
-# Load model at startup
-MODEL_PATH = os.path.join(os.path.dirname(__file__), "models", "mistral-7b-openorca.gguf2.Q4_0.gguf")
-model = GPT4All(MODEL_PATH, allow_download=False)
+from database import (
+    SessionLocal,
+    get_user_memory,
+    save_user_memory,
+    save_chat,
+    get_chat_history
+)
+
+# =========================
+# Flask App Initialization
+# =========================
 
 app = Flask(__name__)
-CORS(app)
+CORS(app)  # Enable CORS for frontend applications
+
+# =========================
+# Load Model (ONLY ONCE)
+# =========================
+
+MODEL_PATH = os.path.join(
+    os.path.dirname(__file__),
+    "models",
+    "mistral-7b-openorca.gguf2.Q4_0.gguf"
+)
+
+# Check if model exists
+if not os.path.exists(MODEL_PATH):
+    print(f"WARNING: Model not found at {MODEL_PATH}")
+    print("Please download the model and place it in the models directory")
+    model = None
+else:
+    model = GPT4All(MODEL_PATH, allow_download=False)
+
+
+# =========================
+# Clean AI Output
+# =========================
 
 def clean_output(text):
-    for w in ["Doctor:", "Assistant:", "Respond:", "Bot:", "Advice:"]:
+    remove_words = ["Doctor:", "Assistant:", "Respond:", "Bot:", "Advice:"]
+    for w in remove_words:
         text = text.replace(w, "")
+
     text = re.sub(r"\n+", " ", text)
     text = re.sub(r"\s+", " ", text)
     text = re.sub(r'(Remember.*?provider\.)', '', text, flags=re.I)
+
     return text.strip()
 
+
+# =========================
+# Emergency Check
+# =========================
+
 def emergency_check(text):
-    return any(d in text.lower() for d in ["bleeding", "pregnant", "chest pain", "faint", "unconscious", "breathing", "seizure"])
+    danger = [
+        "bleeding", "pregnant", "chest pain", "faint",
+        "unconscious", "breathing", "seizure"
+    ]
+
+    for d in danger:
+        if d in text.lower():
+            return True
+
+    return False
+
 
 def is_recovered(text):
-    good_phrases = ["i am fine", "i'm fine", "i am okay", "i'm okay", "i feel better",
-                    "i am well", "i'm well", "i have recovered", "no more pain", "no more fever"]
-    return any(p in text.lower() for p in good_phrases)
+    good_phrases = [
+        "i am fine",
+        "i'm fine",
+        "i am okay",
+        "i'm okay",
+        "i feel better",
+        "i am well",
+        "i'm well",
+        "i have recovered",
+        "no more pain",
+        "no more fever"
+    ]
+
+    text = text.lower()
+
+    return any(p in text for p in good_phrases)
+
+
+# =========================
+# Memory Update
+# =========================
 
 def update_memory(text, memory):
     text = text.lower()
+
+    # Clear memory if recovered
     if is_recovered(text):
         memory["symptoms"].clear()
         memory["duration"] = None
         memory["severity"] = None
         return
-    for s in ["fever", "headache", "pain", "cough", "cold", "tired", "fatigue",
-              "vomiting", "diarrhea", "bleeding", "swelling", "nausea"]:
+
+    symptoms_list = [
+        "fever", "headache", "pain", "cough", "cold",
+        "tired", "fatigue", "vomiting", "diarrhea",
+        "bleeding", "swelling", "nausea"
+    ]
+
+    for s in symptoms_list:
         if s in text and s not in memory["symptoms"]:
             memory["symptoms"].append(s)
+
     if "yesterday" in text:
         memory["duration"] = "since yesterday"
     elif "today" in text:
         memory["duration"] = "today"
 
+
+# =========================
+# Prompt Builder
+# =========================
+
 def build_prompt(user_input, memory):
     context = ""
-    if memory.get("symptoms"):
+
+    if memory["symptoms"]:
         context += f"Symptoms: {', '.join(memory['symptoms'])}\n"
-    if memory.get("duration"):
+
+    if memory["duration"]:
         context += f"Duration: {memory['duration']}\n"
-    return f"""
+
+    prompt = f"""
 You are a calm, supportive hospital virtual assistant.
 Do not repeat yourself.
 Give short, human-like advice.
@@ -61,46 +147,260 @@ Patient: {user_input}
 Reply naturally in one short paragraph.
 """
 
-def generate_reply(user_input, memory):
-    with model.chat_session():
-        response = model.generate(build_prompt(user_input, memory), max_tokens=150, temp=0.4)
-    return clean_output(response)
+    return prompt
 
-@app.route("/chat", methods=["POST"])
-def chat_api():
+
+# =========================
+# API Routes
+# =========================
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    """Check if the API is running and model is loaded"""
+    return jsonify({
+        'status': 'healthy',
+        'model_loaded': model is not None,
+        'timestamp': datetime.utcnow().isoformat()
+    })
+
+
+@app.route('/chat', methods=['POST'])
+def chat():
+    """
+    Send a message to the assistant
+    
+    Expected JSON payload:
+    {
+        "user_id": "user123",
+        "message": "I have a headache"
+    }
+    """
+    if model is None:
+        return jsonify({
+            'error': 'Model not loaded. Please check model file path.'
+        }), 500
+
     data = request.get_json()
-    user_id = data.get("user_id")
-    message = data.get("message")
-    if not user_id or not message:
-        return jsonify({"error": "user_id and message required"}), 400
-
+    
+    if not data:
+        return jsonify({'error': 'No JSON data provided'}), 400
+    
+    user_id = data.get('user_id')
+    user_message = data.get('message')
+    
+    if not user_id:
+        return jsonify({'error': 'user_id is required'}), 400
+    
+    if not user_message:
+        return jsonify({'error': 'message is required'}), 400
+    
+    # Create database session
     db = SessionLocal()
+    
     try:
+        # Load user memory
         memory = get_user_memory(db, user_id)
-        save_chat(db, user_id, "user", message)
-        update_memory(message, memory)
+        
+        # Save user message to chat history
+        save_chat(db, user_id, "user", user_message)
+        
+        # Update memory based on message
+        update_memory(user_message, memory)
+        
+        # Save updated memory
         save_user_memory(db, user_id, memory)
-
-        if emergency_check(message):
+        
+        # Check for emergency
+        if emergency_check(user_message):
             reply = "This may be serious. Please visit the hospital immediately."
-            save_chat(db, user_id, "assistant", reply)
-            return jsonify({"reply": reply})
-
-        reply = generate_reply(message, memory)
+        else:
+            # Generate AI response
+            prompt = build_prompt(user_message, memory)
+            
+            with model.chat_session():
+                response = model.generate(
+                    prompt,
+                    max_tokens=150,
+                    temp=0.4
+                )
+            
+            reply = clean_output(response)
+        
+        # Save assistant reply to chat history
         save_chat(db, user_id, "assistant", reply)
-        return jsonify({"reply": reply, "memory": memory})
+        
+        return jsonify({
+            'user_id': user_id,
+            'reply': reply,
+            'memory': memory,
+            'timestamp': datetime.utcnow().isoformat()
+        })
+    
+    except Exception as e:
+        db.rollback()
+        return jsonify({'error': str(e)}), 500
+    
     finally:
         db.close()
 
-@app.route("/", methods=["GET"])
-def home():
-    return "Medical AI Chat API is live "
 
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8000))
-    app.run(host="0.0.0.0", port=port)
+@app.route('/memory/<user_id>', methods=['GET'])
+def get_memory(user_id):
+    """Get the current memory state for a user"""
+    db = SessionLocal()
+    
+    try:
+        memory = get_user_memory(db, user_id)
+        return jsonify({
+            'user_id': user_id,
+            'memory': memory
+        })
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    
+    finally:
+        db.close()
 
 
+@app.route('/memory/<user_id>', methods=['PUT'])
+def update_memory_api(user_id):
+    """
+    Manually update a user's memory
+    
+    Expected JSON payload:
+    {
+        "symptoms": ["fever", "headache"],
+        "duration": "since yesterday",
+        "severity": "mild"
+    }
+    """
+    data = request.get_json()
+    
+    if not data:
+        return jsonify({'error': 'No JSON data provided'}), 400
+    
+    db = SessionLocal()
+    
+    try:
+        # Get current memory
+        memory = get_user_memory(db, user_id)
+        
+        # Update with provided data
+        if 'symptoms' in data:
+            memory['symptoms'] = data['symptoms']
+        if 'duration' in data:
+            memory['duration'] = data['duration']
+        if 'severity' in data:
+            memory['severity'] = data['severity']
+        
+        # Save updated memory
+        save_user_memory(db, user_id, memory)
+        
+        return jsonify({
+            'user_id': user_id,
+            'memory': memory,
+            'message': 'Memory updated successfully'
+        })
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    
+    finally:
+        db.close()
+
+
+@app.route('/history/<user_id>', methods=['GET'])
+def get_history(user_id):
+    """Get chat history for a user"""
+    limit = request.args.get('limit', default=50, type=int)
+    
+    db = SessionLocal()
+    
+    try:
+        history = get_chat_history(db, user_id, limit)
+        return jsonify({
+            'user_id': user_id,
+            'history': history,
+            'count': len(history)
+        })
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    
+    finally:
+        db.close()
+
+
+@app.route('/clear-memory/<user_id>', methods=['POST'])
+def clear_memory(user_id):
+    """Clear all memory for a user"""
+    db = SessionLocal()
+    
+    try:
+        empty_memory = {
+            "symptoms": [],
+            "duration": None,
+            "severity": None
+        }
+        save_user_memory(db, user_id, empty_memory)
+        
+        return jsonify({
+            'user_id': user_id,
+            'memory': empty_memory,
+            'message': 'Memory cleared successfully'
+        })
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    
+    finally:
+        db.close()
+
+
+# =========================
+# Error Handlers
+# =========================
+
+@app.errorhandler(404)
+def not_found(error):
+    return jsonify({'error': 'Resource not found'}), 404
+
+
+@app.errorhandler(500)
+def internal_error(error):
+    return jsonify({'error': 'Internal server error'}), 500
+
+
+# =========================
+# Run the App
+# =========================
+
+if __name__ == '__main__':
+    print("\n" + "="*50)
+    print(" Hospital Assistant API")
+    print("="*50)
+    
+    if model is None:
+        print("⚠️  WARNING: Model not loaded!")
+        print(f"   Please ensure model exists at: {MODEL_PATH}")
+    else:
+        print(" Model loaded successfully")
+    
+    print("\n Starting Flask server...")
+    print(" API Endpoints:")
+    print("   GET  /health              - Health check")
+    print("   POST /chat                 - Send a message")
+    print("   GET  /memory/<user_id>     - Get user memory")
+    print("   PUT  /memory/<user_id>     - Update user memory")
+    print("   GET  /history/<user_id>    - Get chat history")
+    print("   POST /clear-memory/<user_id> - Clear user memory")
+    print("\n💡 Test with: curl -X POST http://localhost:6000/chat \\")
+    print('     -H "Content-Type: application/json" \\')
+    print('     -d \'{"user_id": "test", "message": "I have a headache"}\'')
+    print("\n" + "="*50)
+    
+    app.run(host='0.0.0.0', port=6000, debug=True)
 
 # import os
 # import re
